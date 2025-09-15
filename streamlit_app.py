@@ -313,100 +313,41 @@ def display_scenario_selector():
         
         # Query input
         st.markdown("### Query")
-        
-        # Query selection options
-        query_option = st.radio(
-            "How would you like to provide your SQL query?",
-            ["📝 Write Custom Query", "📋 Use Suggested Query"],
-            key="sqlite_query_option"
-        )
-        
-        # Initialize sql_text variable
-        sql_text = ""
-        
-        if query_option == "📋 Use Suggested Query":
-            suggested_queries = {
-                "Slow Query (Missing Index)": """SELECT order_id, customer_id, order_date, total_amount 
+        suggested_queries = {
+            "Slow Query (Missing Index)": """SELECT order_id, customer_id, order_date, total_amount 
 FROM orders 
 WHERE created_at >= '2024-01-01' 
 AND status = 'completed' 
 ORDER BY total_amount DESC 
 LIMIT 100;""",
-                
-                "Join Query": """SELECT c.customer_name, COUNT(o.order_id) as order_count 
+            
+            "Join Query": """SELECT c.customer_name, COUNT(o.order_id) as order_count 
 FROM customers c 
 LEFT JOIN orders o ON c.customer_id = o.customer_id 
 WHERE c.registration_date >= '2023-01-01' 
 GROUP BY c.customer_id, c.customer_name 
 HAVING COUNT(o.order_id) > 5;"""
-            }
-            
-            selected_query = st.selectbox("Choose a suggested query:", 
-                                        [""] + list(suggested_queries.keys()),
-                                        key="sqlite_suggested")
-            
-            if selected_query and selected_query in suggested_queries:
-                sql_text = suggested_queries[selected_query]
-                st.code(sql_text, language="sql")
-            else:
-                sql_text = st.text_area("SQL to analyze", 
-                                      value="SELECT COUNT(*) FROM orders WHERE status = 'completed';",
-                                      height=140, 
-                                      key="sqlite_sql_suggested")
+        }
+        
+        selected_query = st.selectbox("Choose a suggested query:", 
+                                    [""] + list(suggested_queries.keys()),
+                                    key="sqlite_suggested")
+        
+        if selected_query and selected_query in suggested_queries:
+            default_sql = suggested_queries[selected_query]
         else:
-            # Custom query option
-            st.info("💡 **Tip**: You can write any SQL query here. The sample database has `customers` and `orders` tables.")
+            default_sql = "SELECT COUNT(*) FROM orders WHERE status = 'completed';"
             
-            # Show schema helper
-            with st.expander("📋 View Database Schema", expanded=False):
-                st.markdown("""
-                **customers** table:
-                - `customer_id` (INTEGER PRIMARY KEY)
-                - `customer_name` (TEXT)
-                - `email` (TEXT)  
-                - `registration_date` (DATE)
-                
-                **orders** table:
-                - `order_id` (INTEGER PRIMARY KEY)
-                - `customer_id` (INTEGER)
-                - `order_date` (DATE)
-                - `created_at` (TIMESTAMP)
-                - `total_amount` (DECIMAL)
-                - `status` (TEXT) - 'completed', 'pending', 'cancelled'
-                """)
-            
-            # Custom query input
-            placeholder_query = """-- Example: Find top customers by order count
-SELECT c.customer_name, COUNT(o.order_id) as order_count, 
-       SUM(o.total_amount) as total_spent
-FROM customers c 
-JOIN orders o ON c.customer_id = o.customer_id 
-GROUP BY c.customer_id, c.customer_name 
-ORDER BY order_count DESC 
-LIMIT 10;"""
-            
-            sql_text = st.text_area(
-                "Write your SQL query:",
-                placeholder=placeholder_query,
-                height=180,
-                key="sqlite_sql_custom",
-                help="Write any SELECT query to analyze. The system will generate an execution plan and performance recommendations."
-            )
+        sql_text = st.text_area("SQL to analyze", 
+                              value=default_sql if selected_query else "",
+                              height=140, 
+                              key="sqlite_sql")
         
         estimated_only = st.checkbox("Query plan only (do not execute)", value=True, key="sqlite_plan_only")
         
-        # Validation and action buttons
-        is_query_valid = bool(sql_text and sql_text.strip())
-        
-        if not is_query_valid:
-            if query_option == "📋 Use Suggested Query":
-                st.warning("⚠️ Please select a suggested query or write a custom one")
-            else:
-                st.warning("⚠️ Please write a SQL query to analyze")
-        
         cols = st.columns(2)
         with cols[0]:
-            if st.button("Collect Diagnostics", key="sqlite_collect") and is_query_valid and custom_path:
+            if st.button("Collect Diagnostics", key="sqlite_collect") and sql_text.strip() and custom_path:
                 if os.path.exists(custom_path):
                     with st.spinner("Collecting diagnostics from SQLite database..."):
                         collector = SqliteCollector(custom_path)
@@ -414,7 +355,7 @@ LIMIT 10;"""
                         st.session_state["sqlite_collected"] = sqlite_data
                         st.success("✅ Diagnostics collected!")
                 else:
-                    st.error("❌ Database file not found")
+                    st.error("Database file not found")
         
         with cols[1]:
             if st.button("Clear", key="sqlite_clear"):
@@ -423,7 +364,9 @@ LIMIT 10;"""
         if st.session_state.get("sqlite_collected"):
             return {"mode": "sqlite", "data": st.session_state["sqlite_collected"], "valid": True}
         
-        return {"mode": "sqlite", "data": None, "valid": is_query_valid}
+        if not sql_text.strip():
+            st.warning("Enter a SQL query to proceed")
+        return {"mode": "sqlite", "data": None, "valid": False}
 
     elif mode == "🟠 MySQL Database":
         st.markdown("### 🟠 MySQL Database")
@@ -480,21 +423,6 @@ LIMIT 10;"""
             try:
                 diagnostician = DatabaseDiagnostician()
                 
-                # Build full conversation context from entire chat history
-                conversation_context = []
-                conversation_context.append("=== CONVERSATION HISTORY ===")
-                
-                # Add all previous messages for context (excluding the just-added current prompt)
-                for i, msg in enumerate(st.session_state.chat_history[:-1]):  # Exclude current user message
-                    if msg["role"] == "user":
-                        conversation_context.append(f"USER: {msg['content']}")
-                    else:
-                        conversation_context.append(f"SYSTEM: {msg['content']}")
-                
-                # Add current user prompt
-                conversation_context.append(f"USER: {prompt}")
-                conversation_context.append("=== END HISTORY ===")
-                
                 # Check if this is the first substantial interaction
                 if not st.session_state.conversation_started:
                     # First interaction - use XML format for analysis
@@ -503,9 +431,7 @@ LIMIT 10;"""
                     
                     if is_analysis_request:
                         # Enhanced prompt for analysis with XML output (first interaction only)
-                        chat_prompt = f"""You are a SQL performance expert. 
-
-{chr(10).join(conversation_context)}
+                        chat_prompt = f"""You are a SQL performance expert. The user asked: "{prompt}"
 
 This is the first substantial interaction, so provide a structured analysis in this XML format:
 
@@ -527,22 +453,16 @@ After this response, future interactions will use simple <queries></queries> and
                         st.session_state.conversation_started = True
                     else:
                         # Regular conversational prompt for non-analysis questions
-                        chat_prompt = f"""You are a helpful SQL performance expert assistant. 
-
-{chr(10).join(conversation_context)}
+                        chat_prompt = f"""You are a helpful SQL performance expert assistant. The user asked: "{prompt}"
 
 Provide a helpful, conversational response about SQL performance, query optimization, or database tuning. Be specific and actionable when possible.
 
 Keep your response conversational and helpful, around 2-3 paragraphs maximum."""
                 else:
-                    # Subsequent interactions - include full conversation context
-                    chat_prompt = f"""You are a SQL performance expert. Review the full conversation history below and respond to the latest user query with complete context awareness.
+                    # Subsequent interactions - use simple query/response format
+                    chat_prompt = f"""<queries>{prompt}</queries>
 
-{chr(10).join(conversation_context)}
-
-<queries>{prompt}</queries>
-
-Based on the conversation history above, respond to the user's current query in a helpful, conversational manner. Keep your response in simple <response></response> tags and maintain continuity with the previous conversation."""
+You are a SQL performance expert. Respond to the user's query in a helpful, conversational manner. Keep your response in simple <response></response> tags."""
                 
                 response = diagnostician.chat.send_message(chat_prompt)
                 raw_response = response.text or "Sorry, I couldn't generate a response. Please try again."

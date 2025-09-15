@@ -225,68 +225,41 @@ def format_diagnosis_output(diagnosis: Dict[str, any]) -> str:
 
 def clean_response_from_xml_tags(response_text: str) -> str:
     """
-    Clean XML tags from response text while preserving structure with proper headings.
+    Clean any XML tags from response text to hide technical details from end users.
     
     Args:
         response_text: Raw response text that may contain XML tags
         
     Returns:
-        Cleaned text with XML tags replaced by proper markdown headings
+        Cleaned text with XML tags removed
     """
     import re
     
-    cleaned_text = response_text
-    
-    # Replace XML sections with proper markdown headings while preserving content
-    section_replacements = [
-        (r'<analysis[^>]*>(.*?)</analysis>', r'\1'),
-        (r'<diagnosis[^>]*>(.*?)</diagnosis>', r'\1'),
-        (r'<reasoning[^>]*>(.*?)</reasoning>', r'**Analysis:**\n\1'),
-        (r'<bottlenecks?[^>]*>(.*?)</bottlenecks?>', r'**🚨 Performance Issues:**\n\1'),
-        (r'<recommendations?[^>]*>(.*?)</recommendations?>', r'**💡 Recommendations:**\n\1'),
-        (r'<root_causes?[^>]*>(.*?)</root_causes?>', r'**⚠️ Root Causes:**\n\1'),
-        (r'<comments?[^>]*>(.*?)</comments?>', r'**📝 Additional Notes:**\n\1'),
-        (r'<tips?[^>]*>(.*?)</tips?>', r'**🎯 Pro Tips:**\n\1'),
-    ]
-    
-    # Also remove individual item tags that might cause duplicate headings
-    item_tag_removals = [
-        r'<bottleneck[^>]*>',
-        r'</bottleneck>',
-        r'<recommendation[^>]*>',
-        r'</recommendation>',
-        r'<root_cause[^>]*>',
-        r'</root_cause>',
-        r'<comment[^>]*>',
-        r'</comment>',
-        r'<tip[^>]*>',
-        r'</tip>',
-    ]
-    
-    # Apply section replacements (preserve content, add headings)
-    for pattern, replacement in section_replacements:
-        cleaned_text = re.sub(pattern, replacement, cleaned_text, flags=re.IGNORECASE | re.DOTALL)
-    
-    # Remove individual item tags to prevent duplicate headings
-    for pattern in item_tag_removals:
-        cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.IGNORECASE)
-    
-    # Remove remaining XML tags that don't need content preservation
-    simple_removals = [
+    # Remove common XML tags that might leak through
+    xml_patterns = [
+        r'</?analysis[^>]*>',
+        r'</?diagnosis[^>]*>',
+        r'</?reasoning[^>]*>',
+        r'</?bottlenecks?[^>]*>',
+        r'</?root_causes?[^>]*>',
+        r'</?recommendations?[^>]*>',
+        r'</?comments?[^>]*>',
+        r'</?tips?[^>]*>',
         r'</?queries?[^>]*>',
         r'</?response[^>]*>',
         r'<!\[CDATA\[',
         r'\]\]>',
     ]
     
-    for pattern in simple_removals:
+    cleaned_text = response_text
+    for pattern in xml_patterns:
         cleaned_text = re.sub(pattern, '', cleaned_text, flags=re.IGNORECASE)
     
     # Clean up any remaining angle brackets that look like broken XML
     cleaned_text = re.sub(r'<[^>]*>', '', cleaned_text)
     
-    # Clean up extra whitespace but preserve intentional formatting
-    cleaned_text = re.sub(r'\n\s*\n\s*\n+', '\n\n', cleaned_text)
+    # Clean up extra whitespace
+    cleaned_text = re.sub(r'\n\s*\n\s*\n', '\n\n', cleaned_text)
     cleaned_text = cleaned_text.strip()
     
     return cleaned_text
