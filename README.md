@@ -301,16 +301,7 @@ streamlit run streamlit_app.py
 - [ ] **Role-based Access**: Team collaboration and permissions
 - [ ] **Alert System**: Proactive performance issue detection
 - [ ] **Recommendation Tracking**: Monitor implemented optimizations
-
-## 🤝 Contributing
-
-We welcome contributions! Areas where help is needed:
-
-- **Database Collectors**: Add support for more database types
-- **Analysis Templates**: Improve XML prompting templates  
-- **Test Scenarios**: Add more realistic database scenarios
-- **UI/UX**: Enhance the web interface design
-- **Documentation**: Improve guides and examples
+- [ ] 
 
 ### Development Setup
 
