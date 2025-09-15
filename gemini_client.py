@@ -46,7 +46,7 @@ class DatabaseDiagnostician:
         
         # Initialize model
         self.model = genai.GenerativeModel(
-            model_name="gemini-1.5-flash",  # Free tier model with higher quota
+            model_name="gemini-2.5-flash",  # Latest model with improved performance
             generation_config=self.generation_config,
         )
         
@@ -222,7 +222,7 @@ def test_connection() -> bool:
         genai.configure(api_key=api_key)
         
         # Simple test
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         response = model.generate_content("Hello, this is a connection test.")
         
         if response.text:

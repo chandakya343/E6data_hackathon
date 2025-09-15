@@ -8,7 +8,7 @@ import os
 from datetime import datetime
 from fake_db_data import SAMPLE_DATA
 from gemini_client import DatabaseDiagnostician, test_connection
-from xml_utils import format_diagnosis_output
+from xml_utils import format_diagnosis_output, clean_response_from_xml_tags
 import json
 import re
 from collectors.sqlserver_collector import SqlServerCollector
@@ -313,41 +313,100 @@ def display_scenario_selector():
         
         # Query input
         st.markdown("### Query")
-        suggested_queries = {
-            "Slow Query (Missing Index)": """SELECT order_id, customer_id, order_date, total_amount 
+        
+        # Query selection options
+        query_option = st.radio(
+            "How would you like to provide your SQL query?",
+            ["📝 Write Custom Query", "📋 Use Suggested Query"],
+            key="sqlite_query_option"
+        )
+        
+        # Initialize sql_text variable
+        sql_text = ""
+        
+        if query_option == "📋 Use Suggested Query":
+            suggested_queries = {
+                "Slow Query (Missing Index)": """SELECT order_id, customer_id, order_date, total_amount 
 FROM orders 
 WHERE created_at >= '2024-01-01' 
 AND status = 'completed' 
 ORDER BY total_amount DESC 
 LIMIT 100;""",
-            
-            "Join Query": """SELECT c.customer_name, COUNT(o.order_id) as order_count 
+                
+                "Join Query": """SELECT c.customer_name, COUNT(o.order_id) as order_count 
 FROM customers c 
 LEFT JOIN orders o ON c.customer_id = o.customer_id 
 WHERE c.registration_date >= '2023-01-01' 
 GROUP BY c.customer_id, c.customer_name 
 HAVING COUNT(o.order_id) > 5;"""
-        }
-        
-        selected_query = st.selectbox("Choose a suggested query:", 
-                                    [""] + list(suggested_queries.keys()),
-                                    key="sqlite_suggested")
-        
-        if selected_query and selected_query in suggested_queries:
-            default_sql = suggested_queries[selected_query]
-        else:
-            default_sql = "SELECT COUNT(*) FROM orders WHERE status = 'completed';"
+            }
             
-        sql_text = st.text_area("SQL to analyze", 
-                              value=default_sql if selected_query else "",
-                              height=140, 
-                              key="sqlite_sql")
+            selected_query = st.selectbox("Choose a suggested query:", 
+                                        [""] + list(suggested_queries.keys()),
+                                        key="sqlite_suggested")
+            
+            if selected_query and selected_query in suggested_queries:
+                sql_text = suggested_queries[selected_query]
+                st.code(sql_text, language="sql")
+            else:
+                sql_text = st.text_area("SQL to analyze", 
+                                      value="SELECT COUNT(*) FROM orders WHERE status = 'completed';",
+                                      height=140, 
+                                      key="sqlite_sql_suggested")
+        else:
+            # Custom query option
+            st.info("💡 **Tip**: You can write any SQL query here. The sample database has `customers` and `orders` tables.")
+            
+            # Show schema helper
+            with st.expander("📋 View Database Schema", expanded=False):
+                st.markdown("""
+                **customers** table:
+                - `customer_id` (INTEGER PRIMARY KEY)
+                - `customer_name` (TEXT)
+                - `email` (TEXT)  
+                - `registration_date` (DATE)
+                
+                **orders** table:
+                - `order_id` (INTEGER PRIMARY KEY)
+                - `customer_id` (INTEGER)
+                - `order_date` (DATE)
+                - `created_at` (TIMESTAMP)
+                - `total_amount` (DECIMAL)
+                - `status` (TEXT) - 'completed', 'pending', 'cancelled'
+                """)
+            
+            # Custom query input
+            placeholder_query = """-- Example: Find top customers by order count
+SELECT c.customer_name, COUNT(o.order_id) as order_count, 
+       SUM(o.total_amount) as total_spent
+FROM customers c 
+JOIN orders o ON c.customer_id = o.customer_id 
+GROUP BY c.customer_id, c.customer_name 
+ORDER BY order_count DESC 
+LIMIT 10;"""
+            
+            sql_text = st.text_area(
+                "Write your SQL query:",
+                placeholder=placeholder_query,
+                height=180,
+                key="sqlite_sql_custom",
+                help="Write any SELECT query to analyze. The system will generate an execution plan and performance recommendations."
+            )
         
         estimated_only = st.checkbox("Query plan only (do not execute)", value=True, key="sqlite_plan_only")
         
+        # Validation and action buttons
+        is_query_valid = bool(sql_text and sql_text.strip())
+        
+        if not is_query_valid:
+            if query_option == "📋 Use Suggested Query":
+                st.warning("⚠️ Please select a suggested query or write a custom one")
+            else:
+                st.warning("⚠️ Please write a SQL query to analyze")
+        
         cols = st.columns(2)
         with cols[0]:
-            if st.button("Collect Diagnostics", key="sqlite_collect") and sql_text.strip() and custom_path:
+            if st.button("Collect Diagnostics", key="sqlite_collect") and is_query_valid and custom_path:
                 if os.path.exists(custom_path):
                     with st.spinner("Collecting diagnostics from SQLite database..."):
                         collector = SqliteCollector(custom_path)
@@ -355,7 +414,7 @@ HAVING COUNT(o.order_id) > 5;"""
                         st.session_state["sqlite_collected"] = sqlite_data
                         st.success("✅ Diagnostics collected!")
                 else:
-                    st.error("Database file not found")
+                    st.error("❌ Database file not found")
         
         with cols[1]:
             if st.button("Clear", key="sqlite_clear"):
@@ -364,9 +423,7 @@ HAVING COUNT(o.order_id) > 5;"""
         if st.session_state.get("sqlite_collected"):
             return {"mode": "sqlite", "data": st.session_state["sqlite_collected"], "valid": True}
         
-        if not sql_text.strip():
-            st.warning("Enter a SQL query to proceed")
-        return {"mode": "sqlite", "data": None, "valid": False}
+        return {"mode": "sqlite", "data": None, "valid": is_query_valid}
 
     elif mode == "🟠 MySQL Database":
         st.markdown("### 🟠 MySQL Database")
@@ -392,11 +449,14 @@ HAVING COUNT(o.order_id) > 5;"""
         st.markdown("### 💬 AI Chat Assistant")
         st.info("💡 Chat with our SQL performance expert! Ask questions about your queries, get optimization tips, or discuss database performance.")
         
-        # Initialize chat history if not exists
+        # Initialize chat history and conversation state
         if "chat_history" not in st.session_state:
             st.session_state.chat_history = [
                 {"role": "assistant", "content": "👋 Hi! I'm your SQL performance assistant. How can I help you optimize your database queries today?"}
             ]
+        
+        if "conversation_started" not in st.session_state:
+            st.session_state.conversation_started = False
         
         # Chat container
         chat_container = st.container()
@@ -420,54 +480,76 @@ HAVING COUNT(o.order_id) > 5;"""
             try:
                 diagnostician = DatabaseDiagnostician()
                 
-                # Check if user is asking for query analysis
-                analysis_keywords = ["analyze", "performance", "bottleneck", "optimize", "slow", "improve", "diagnose", "explain plan"]
-                is_analysis_request = any(keyword in prompt.lower() for keyword in analysis_keywords)
+                # Build full conversation context from entire chat history
+                conversation_context = []
+                conversation_context.append("=== CONVERSATION HISTORY ===")
                 
-                if is_analysis_request:
-                    # Enhanced prompt for analysis with XML output
-                    chat_prompt = f"""You are a SQL performance expert. The user asked: "{prompt}"
+                # Add all previous messages for context (excluding the just-added current prompt)
+                for i, msg in enumerate(st.session_state.chat_history[:-1]):  # Exclude current user message
+                    if msg["role"] == "user":
+                        conversation_context.append(f"USER: {msg['content']}")
+                    else:
+                        conversation_context.append(f"SYSTEM: {msg['content']}")
+                
+                # Add current user prompt
+                conversation_context.append(f"USER: {prompt}")
+                conversation_context.append("=== END HISTORY ===")
+                
+                # Check if this is the first substantial interaction
+                if not st.session_state.conversation_started:
+                    # First interaction - use XML format for analysis
+                    analysis_keywords = ["analyze", "performance", "bottleneck", "optimize", "slow", "improve", "diagnose", "explain plan", "query", "sql"]
+                    is_analysis_request = any(keyword in prompt.lower() for keyword in analysis_keywords)
+                    
+                    if is_analysis_request:
+                        # Enhanced prompt for analysis with XML output (first interaction only)
+                        chat_prompt = f"""You are a SQL performance expert. 
 
-If they're asking about SQL analysis, performance diagnosis, or query optimization, respond with structured analysis in this XML format:
+{chr(10).join(conversation_context)}
+
+This is the first substantial interaction, so provide a structured analysis in this XML format:
 
 <analysis>
   <summary>Brief conversational response to their question</summary>
   <bottlenecks>
-    <bottleneck type="BottleneckType" severity="High|Medium|Low">Description of bottleneck</bottleneck>
+    <bottleneck type="BottleneckType" severity="High|Medium|Low">Description of bottleneck or potential issue</bottleneck>
   </bottlenecks>
   <recommendations>
-    <recommendation type="RecommendationType" priority="High|Medium|Low">Specific recommendation</recommendation>
+    <recommendation type="RecommendationType" priority="High|Medium|Low">Specific recommendation or best practice</recommendation>
   </recommendations>
   <tips>
     <tip>Practical tip or insight</tip>
   </tips>
 </analysis>
 
-Otherwise, provide a helpful conversational response about SQL performance, query optimization, or database tuning."""
-                else:
-                    # Regular conversational prompt
-                    chat_prompt = f"""You are a helpful SQL performance expert assistant. The user asked: "{prompt}"
+After this response, future interactions will use simple <queries></queries> and <response></response> format for natural conversation."""
+                        
+                        st.session_state.conversation_started = True
+                    else:
+                        # Regular conversational prompt for non-analysis questions
+                        chat_prompt = f"""You are a helpful SQL performance expert assistant. 
+
+{chr(10).join(conversation_context)}
 
 Provide a helpful, conversational response about SQL performance, query optimization, or database tuning. Be specific and actionable when possible.
 
 Keep your response conversational and helpful, around 2-3 paragraphs maximum."""
+                else:
+                    # Subsequent interactions - include full conversation context
+                    chat_prompt = f"""You are a SQL performance expert. Review the full conversation history below and respond to the latest user query with complete context awareness.
+
+{chr(10).join(conversation_context)}
+
+<queries>{prompt}</queries>
+
+Based on the conversation history above, respond to the user's current query in a helpful, conversational manner. Keep your response in simple <response></response> tags and maintain continuity with the previous conversation."""
                 
                 response = diagnostician.chat.send_message(chat_prompt)
                 raw_response = response.text or "Sorry, I couldn't generate a response. Please try again."
                 
-                # Check if response contains XML and format it
-                if "<analysis>" in raw_response and "</analysis>" in raw_response:
-                    # Extract and format XML content
-                    start_idx = raw_response.find("<analysis>")
-                    end_idx = raw_response.find("</analysis>") + len("</analysis>")
-                    xml_content = raw_response[start_idx:end_idx]
-                    
-                    # Parse XML content
-                    formatted_response = _format_chat_analysis_xml(xml_content)
-                    st.session_state.chat_history.append({"role": "assistant", "content": formatted_response})
-                else:
-                    # Regular response
-                    st.session_state.chat_history.append({"role": "assistant", "content": raw_response})
+                # Process response based on format
+                formatted_response = _process_chat_response(raw_response, st.session_state.conversation_started)
+                st.session_state.chat_history.append({"role": "assistant", "content": formatted_response})
                 
             except Exception as e:
                 error_msg = f"Sorry, I encountered an error: {str(e)}"
@@ -481,6 +563,7 @@ Keep your response conversational and helpful, around 2-3 paragraphs maximum."""
             st.session_state.chat_history = [
                 {"role": "assistant", "content": "👋 Hi! I'm your SQL performance assistant. How can I help you optimize your database queries today?"}
             ]
+            st.session_state.conversation_started = False
             st.rerun()
         
         return {"mode": "chat", "data": None, "valid": False}
@@ -724,6 +807,40 @@ def _format_chat_analysis_xml(xml_content: str) -> str:
     except Exception as e:
         # Fallback to original content if XML parsing fails
         return f"Analysis response (XML parsing failed): {xml_content}"
+
+
+def _process_chat_response(raw_response: str, conversation_started: bool) -> str:
+    """Process chat response based on conversation state and format."""
+    try:
+        if not conversation_started:
+            # First interaction - check for XML analysis format
+            if "<analysis>" in raw_response and "</analysis>" in raw_response:
+                # Extract and format XML content
+                start_idx = raw_response.find("<analysis>")
+                end_idx = raw_response.find("</analysis>") + len("</analysis>")
+                xml_content = raw_response[start_idx:end_idx]
+                
+                # Parse XML content and return formatted response
+                return _format_chat_analysis_xml(xml_content)
+            else:
+                # Regular response for first interaction - clean any XML tags
+                return clean_response_from_xml_tags(raw_response)
+        else:
+            # Subsequent interactions - look for simple response tags
+            if "<response>" in raw_response and "</response>" in raw_response:
+                # Extract content between response tags
+                start_idx = raw_response.find("<response>") + len("<response>")
+                end_idx = raw_response.find("</response>")
+                response_content = raw_response[start_idx:end_idx].strip()
+                # Clean any remaining XML tags from the content
+                return clean_response_from_xml_tags(response_content)
+            else:
+                # Fallback to cleaned raw response if no tags found
+                return clean_response_from_xml_tags(raw_response)
+                
+    except Exception as e:
+        # Fallback to cleaned raw response on any error
+        return clean_response_from_xml_tags(raw_response)
 
 def run_analysis(data_source):
     """Run the AI analysis for the selected scenario or custom data."""

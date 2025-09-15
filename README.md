@@ -8,13 +8,15 @@ Traditional database performance optimization requires expert DBAs to manually a
 
 ### ✨ Key Features
 
-- **🤖 AI-Powered Analysis**: Uses Google's Gemini LLM for expert-level database diagnostics
+- **🤖 AI-Powered Analysis**: Uses Google's Gemini 2.5 Flash for expert-level database diagnostics with full conversation context
 - **🏗️ Structured XML Prompting**: Ensures consistent, parseable analysis outputs
 - **📊 Multi-Interface Support**: Both CLI and beautiful web interface (Streamlit)
-- **🔧 Multiple Database Support**: SQLite, PostgreSQL, SQL Server collectors
+- **💬 AI Chat Assistant**: Interactive chat with SQL performance expert - structured analysis for first query, then natural conversation
+- **🔧 Multiple Database Support**: SQLite, PostgreSQL, SQL Server collectors with custom query support
 - **⚡ Real-time Analysis**: Instant performance bottleneck identification
 - **📈 Actionable Recommendations**: Specific SQL commands and optimization strategies
 - **🎨 Swiss Design UI**: Clean, minimal web interface for easy visualization
+- **🔒 Clean Output**: XML tags hidden from users - only clean, formatted responses shown
 
 ## 🚀 Quick Start
 
@@ -163,9 +165,17 @@ The Streamlit web interface offers:
 
 - **🎯 Swiss Design Aesthetic**: Clean, minimal, typography-focused design
 - **📊 Interactive Analysis**: Upload your own queries or use sample scenarios
+- **💬 Smart AI Chat Assistant**: 
+  - First interaction provides structured analysis with bottlenecks, recommendations, and tips
+  - Subsequent conversations use natural language with clean formatting
+  - **Full conversation context** - AI remembers entire chat history for coherent responses
+  - All XML tags automatically hidden from users
+  - Seamless conversation flow with `<queries>` and `<response>` handling
 - **📈 Real-time Processing**: Watch analysis happen in real-time
 - **💾 Export Results**: Download analysis reports
-- **🔄 Multiple Database Support**: Switch between different database types
+- **🔄 Multiple Database Support**: Switch between different database types with flexible query options:
+  - **Suggested Queries**: Pre-built queries that demonstrate common performance issues
+  - **Custom Queries**: Write your own SQL with schema assistance and real-time validation
 - **📱 Responsive Design**: Works on desktop and mobile
 
 ### Interface Screenshots
@@ -284,7 +294,7 @@ streamlit run streamlit_app.py
 - [ ] **Cost Analysis**: Query cost estimation and optimization ROI
 
 ### Phase 3: Advanced Features  
-- [ ] **Conversational AI**: "Why is my query slow?" natural language interface
+- [x] **Conversational AI**: "Why is my query slow?" natural language interface ✅ COMPLETED
 - [ ] **Automated Testing**: Simulate recommendation impact before implementation
 - [ ] **Performance Benchmarking**: Before/after performance comparisons
 - [ ] **Integration APIs**: Webhook support for CI/CD pipelines
