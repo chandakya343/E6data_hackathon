@@ -13,6 +13,9 @@ import json
 import re
 from collectors.sqlserver_collector import SqlServerCollector
 from collectors.sqlite_collector import SqliteCollector
+import plotly.graph_objects as go
+import plotly.express as px
+from typing import List, Dict, Any
 
 
 # Swiss Design Configuration
@@ -314,17 +317,19 @@ def display_scenario_selector():
         # Query input
         st.markdown("### Query")
         
-        # Query selection options
+        # Query selection options - CUSTOM QUERY FEATURE
         query_option = st.radio(
             "How would you like to provide your SQL query?",
             ["📝 Write Custom Query", "📋 Use Suggested Query"],
-            key="sqlite_query_option"
+            key="sqlite_query_option",
+            horizontal=True
         )
         
         # Initialize sql_text variable
         sql_text = ""
         
         if query_option == "📋 Use Suggested Query":
+            # Suggested queries section
             suggested_queries = {
                 "Slow Query (Missing Index)": """SELECT order_id, customer_id, order_date, total_amount 
 FROM orders 
@@ -354,12 +359,14 @@ HAVING COUNT(o.order_id) > 5;"""
                                       height=140, 
                                       key="sqlite_sql_suggested")
         else:
-            # Custom query option
-            st.info("💡 **Tip**: You can write any SQL query here. The sample database has `customers` and `orders` tables.")
+            # CUSTOM QUERY OPTION - This is the new feature!
+            st.info("💡 **Write your own SQL query!** The sample database has `customers` and `orders` tables.")
             
             # Show schema helper
             with st.expander("📋 View Database Schema", expanded=False):
                 st.markdown("""
+                **📊 Available Tables:**
+                
                 **customers** table:
                 - `customer_id` (INTEGER PRIMARY KEY)
                 - `customer_name` (TEXT)
@@ -373,55 +380,62 @@ HAVING COUNT(o.order_id) > 5;"""
                 - `created_at` (TIMESTAMP)
                 - `total_amount` (DECIMAL)
                 - `status` (TEXT) - 'completed', 'pending', 'cancelled'
+                
+                **💡 Query Ideas:**
+                - Find high-value customers
+                - Analyze order trends by date
+                - Identify slow queries with complex JOINs
+                - Test aggregation performance
                 """)
             
-            # Custom query input
-            placeholder_query = """-- Example: Find top customers by order count
-SELECT c.customer_name, COUNT(o.order_id) as order_count, 
-       SUM(o.total_amount) as total_spent
+            # Custom query input with example
+            placeholder_query = """-- Example: Find top customers by total spending
+SELECT c.customer_name, 
+       COUNT(o.order_id) as order_count, 
+       SUM(o.total_amount) as total_spent,
+       AVG(o.total_amount) as avg_order_value
 FROM customers c 
 JOIN orders o ON c.customer_id = o.customer_id 
+WHERE o.status = 'completed'
 GROUP BY c.customer_id, c.customer_name 
-ORDER BY order_count DESC 
-LIMIT 10;"""
+ORDER BY total_spent DESC 
+LIMIT 20;"""
             
             sql_text = st.text_area(
-                "Write your SQL query:",
+                "✍️ Write your custom SQL query:",
                 placeholder=placeholder_query,
-                height=180,
+                height=200,
                 key="sqlite_sql_custom",
                 help="Write any SELECT query to analyze. The system will generate an execution plan and performance recommendations."
             )
         
         estimated_only = st.checkbox("Query plan only (do not execute)", value=True, key="sqlite_plan_only")
         
-        # Validation and action buttons
+        # Validation for both query types
         is_query_valid = bool(sql_text and sql_text.strip())
         
         if not is_query_valid:
             if query_option == "📋 Use Suggested Query":
-                st.warning("⚠️ Please select a suggested query or write a custom one")
+                st.warning("⚠️ Please select a suggested query from the dropdown above")
             else:
-                st.warning("⚠️ Please write a SQL query to analyze")
+                st.warning("⚠️ Please write a SQL query in the text area above")
         
         cols = st.columns(2)
         with cols[0]:
-            if st.button("Collect Diagnostics", key="sqlite_collect") and is_query_valid and custom_path:
+            if st.button("🚀 Collect Diagnostics", key="sqlite_collect") and is_query_valid and custom_path:
                 if os.path.exists(custom_path):
                     with st.spinner("Collecting diagnostics from SQLite database..."):
                         collector = SqliteCollector(custom_path)
                         sqlite_data = collector.collect_for_query(sql_text, estimated_plan_only=estimated_only)
                         st.session_state["sqlite_collected"] = sqlite_data
-                        # Persist executed runs for post‑analysis
-                        if not estimated_only:
-                            _append_run_history("sqlite", "collected", sqlite_data)
                         st.success("✅ Diagnostics collected!")
                 else:
                     st.error("❌ Database file not found")
         
         with cols[1]:
-            if st.button("Clear", key="sqlite_clear"):
+            if st.button("🗑️ Clear", key="sqlite_clear"):
                 st.session_state.pop("sqlite_collected", None)
+                st.success("Cleared previous results")
         
         if st.session_state.get("sqlite_collected"):
             return {"mode": "sqlite", "data": st.session_state["sqlite_collected"], "valid": True}
@@ -452,21 +466,15 @@ LIMIT 10;"""
         st.markdown("### 💬 AI Chat Assistant")
         st.info("💡 Chat with our SQL performance expert! Ask questions about your queries, get optimization tips, or discuss database performance.")
         
-        # Initialize chat history and conversation state
+        # Initialize chat history
         if "chat_history" not in st.session_state:
             st.session_state.chat_history = [
                 {"role": "assistant", "content": "👋 Hi! I'm your SQL performance assistant. How can I help you optimize your database queries today?"}
             ]
         
-        if "conversation_started" not in st.session_state:
-            st.session_state.conversation_started = False
-        
-        # Chat container
-        chat_container = st.container()
-        
         # Display chat history
-        with chat_container:
-            for i, message in enumerate(st.session_state.chat_history):
+        with st.container():
+            for message in st.session_state.chat_history:
                 if message["role"] == "user":
                     with st.chat_message("user"):
                         st.write(message["content"])
@@ -479,63 +487,26 @@ LIMIT 10;"""
             # Add user message
             st.session_state.chat_history.append({"role": "user", "content": prompt})
             
-            # Generate AI response
             try:
                 diagnostician = DatabaseDiagnostician()
                 
-                # Check if this is the first substantial interaction
-                if not st.session_state.conversation_started:
-                    # First interaction - use XML format for analysis
-                    analysis_keywords = ["analyze", "performance", "bottleneck", "optimize", "slow", "improve", "diagnose", "explain plan", "query", "sql"]
-                    is_analysis_request = any(keyword in prompt.lower() for keyword in analysis_keywords)
-                    
-                    if is_analysis_request:
-                        # Enhanced prompt for analysis with XML output (first interaction only)
-                        chat_prompt = f"""You are a SQL performance expert. The user asked: "{prompt}"
+                # Build simplified history of user/response pairs (exclude the latest user input)
+                pairs = []
+                pending_user = None
+                for m in st.session_state.chat_history[:-1]:
+                    if m["role"] == "user":
+                        pending_user = m["content"]
+                    elif m["role"] == "assistant" and pending_user is not None:
+                        pairs.append({"user": pending_user, "response": m["content"]})
+                        pending_user = None
 
-This is the first substantial interaction, so provide a structured analysis in this XML format:
-
-<analysis>
-  <summary>Brief conversational response to their question</summary>
-  <bottlenecks>
-    <bottleneck type="BottleneckType" severity="High|Medium|Low">Description of bottleneck or potential issue</bottleneck>
-  </bottlenecks>
-  <recommendations>
-    <recommendation type="RecommendationType" priority="High|Medium|Low">Specific recommendation or best practice</recommendation>
-  </recommendations>
-  <tips>
-    <tip>Practical tip or insight</tip>
-  </tips>
-</analysis>
-
-After this response, future interactions will use simple <queries></queries> and <response></response> format for natural conversation."""
-                        
-                        st.session_state.conversation_started = True
-                    else:
-                        # Regular conversational prompt for non-analysis questions
-                        chat_prompt = f"""You are a helpful SQL performance expert assistant. The user asked: "{prompt}"
-
-Provide a helpful, conversational response about SQL performance, query optimization, or database tuning. Be specific and actionable when possible.
-
-Keep your response conversational and helpful, around 2-3 paragraphs maximum."""
-                else:
-                    # Subsequent interactions - use simple query/response format
-                    chat_prompt = f"""<queries>{prompt}</queries>
-
-You are a SQL performance expert. Respond to the user's query in a helpful, conversational manner. Keep your response in simple <response></response> tags."""
-                
-                response = diagnostician.chat.send_message(chat_prompt)
-                raw_response = response.text or "Sorry, I couldn't generate a response. Please try again."
-                
-                # Process response based on format
-                formatted_response = _process_chat_response(raw_response, st.session_state.conversation_started)
-                st.session_state.chat_history.append({"role": "assistant", "content": formatted_response})
+                # Get assistant response using simplified protocol
+                reply = diagnostician.chat_respond(history=pairs, user_message=prompt)
+                st.session_state.chat_history.append({"role": "assistant", "content": reply})
                 
             except Exception as e:
-                error_msg = f"Sorry, I encountered an error: {str(e)}"
-                st.session_state.chat_history.append({"role": "assistant", "content": error_msg})
+                st.session_state.chat_history.append({"role": "assistant", "content": f"Sorry, I encountered an error: {str(e)}"})
             
-            # Rerun to show new messages
             st.rerun()
         
         # Clear chat button
@@ -543,7 +514,6 @@ You are a SQL performance expert. Respond to the user's query in a helpful, conv
             st.session_state.chat_history = [
                 {"role": "assistant", "content": "👋 Hi! I'm your SQL performance assistant. How can I help you optimize your database queries today?"}
             ]
-            st.session_state.conversation_started = False
             st.rerun()
         
         return {"mode": "chat", "data": None, "valid": False}
@@ -730,171 +700,184 @@ def _extract_elapsed_ms_from_logs(log_text: str):
     return None
 
 
-def _append_run_history(mode: str, label: str, data: dict):
-    """Append a run entry to session run history."""
+def initialize_improvement_tracking():
+    """Initialize session state for tracking improvement iterations."""
+    if "improvement_history" not in st.session_state:
+        st.session_state.improvement_history = []
+    if "current_iteration" not in st.session_state:
+        st.session_state.current_iteration = 0
+    if "base_query_data" not in st.session_state:
+        st.session_state.base_query_data = None
+    if "baseline_selection" not in st.session_state:
+        st.session_state.baseline_selection = "Original"
+    if "improved_versions" not in st.session_state:
+        st.session_state.improved_versions = []
+
+
+def add_iteration_to_history(query: str, execution_time_ms: float, diagnosis: dict, iteration_type: str = "improved"):
+    """Add a query iteration to the improvement history."""
+    iteration_data = {
+        "iteration": st.session_state.current_iteration,
+        "query": query,
+        "execution_time_ms": execution_time_ms,
+        "diagnosis": diagnosis,
+        "timestamp": datetime.now().isoformat(),
+        "type": iteration_type  # "original", "improved", "recursive"
+    }
+    st.session_state.improvement_history.append(iteration_data)
+    # Maintain improved_versions cache for quick UI access
     try:
-        if "run_history" not in st.session_state:
-            st.session_state["run_history"] = []
-        elapsed_ms = _extract_elapsed_ms_from_logs(data.get("logs", ""))
-        run_entry = {
-            "id": len(st.session_state["run_history"]) + 1,
-            "timestamp": datetime.now().isoformat(timespec="seconds"),
-            "mode": mode,
-            "label": label,
-            "query": data.get("query", ""),
-            "explain": data.get("explain", ""),
-            "logs": data.get("logs", ""),
-            "elapsed_ms": elapsed_ms,
-            "result_preview": data.get("result_preview", ""),
-            "schema": data.get("schema", ""),
-            "stats": data.get("stats", ""),
-            "config": data.get("config", ""),
-            "system": data.get("system", ""),
-        }
-        st.session_state["run_history"].append(run_entry)
+        if "improved_versions" in st.session_state:
+            st.session_state.improved_versions.append({
+                "iteration": iteration_data["iteration"],
+                "type": iteration_type,
+                "execution_time_ms": execution_time_ms,
+                "query": query,
+                "diagnosis": diagnosis,
+            })
     except Exception:
         pass
+    st.session_state.current_iteration += 1
 
 
-def _get_run_label(run: dict) -> str:
-    """Compact label for a run selection control."""
-    ms = run.get("elapsed_ms")
-    ms_str = f"{ms:.2f} ms" if isinstance(ms, (int, float)) else "n/a"
-    return f"#{run.get('id')} • {run.get('label','run')} • {ms_str}"
-
-
-def _start_iterative_session(db_data: dict, diagnosis: dict) -> None:
-    """Initialize or reset the iterative improvement session with current data/analysis."""
-    st.session_state["iter_round"] = 1
-    st.session_state["iter_current"] = {"db_data": db_data, "diagnosis": diagnosis}
-    st.session_state["iter_rounds"] = []
-    st.session_state["iter_proposal"] = None
-
-
-def display_iterative_improvement_ui():
-    """Simple loop: analyze → propose improvement → run & compare → continue with improved."""
-    if st.session_state.get("current_mode") != "sqlite":
+def plot_improvement_progress():
+    """Create a plotly chart showing SQL improvement progress over iterations."""
+    if not st.session_state.get("improvement_history") or len(st.session_state.improvement_history) < 2:
+        st.info("📊 Run at least 2 iterations to see improvement progress")
         return
+    
+    history = st.session_state.improvement_history
+    
+    # Extract data for plotting
+    iterations = [item["iteration"] for item in history]
+    execution_times = [item["execution_time_ms"] for item in history if item["execution_time_ms"] is not None]
+    iteration_labels = [item["iteration"] for item in history if item["execution_time_ms"] is not None]
+    types = [item["type"] for item in history if item["execution_time_ms"] is not None]
+    
+    if len(execution_times) < 2:
+        st.info("📊 Need execution time data from at least 2 iterations to show progress")
+        return
+    
+    # Create the plot
+    fig = go.Figure()
+    
+    # Add line chart
+    fig.add_trace(go.Scatter(
+        x=iteration_labels,
+        y=execution_times,
+        mode='lines+markers',
+        name='Execution Time',
+        line=dict(color='#1f77b4', width=3),
+        marker=dict(size=8, color='#1f77b4')
+    ))
+    
+    # Add markers for different types
+    colors = {"original": "red", "improved": "orange", "recursive": "green"}
+    for i, (time, label, type_) in enumerate(zip(execution_times, iteration_labels, types)):
+        fig.add_trace(go.Scatter(
+            x=[label],
+            y=[time],
+            mode='markers',
+            name=type_.title(),
+            marker=dict(size=12, color=colors.get(type_, "blue")),
+            showlegend=(i == 0 or type_ not in [t["type"] for t in history[:i]])
+        ))
+    
+    # Add original baseline line if available
+    original_items = [item for item in history if item.get("type") == "original" and item.get("execution_time_ms") is not None]
+    if original_items:
+        baseline = original_items[0]["execution_time_ms"]
+        if execution_times:
+            fig.add_trace(go.Scatter(
+                x=iteration_labels,
+                y=[baseline] * len(iteration_labels),
+                mode='lines',
+                name='Original Baseline',
+                line=dict(color='#d62728', width=2, dash='dash')
+            ))
 
-    st.markdown("---")
-    st.markdown("## 🔁 Iterative Improvement")
+    # Calculate improvement percentage
+    if len(execution_times) >= 2:
+        initial_time = execution_times[0]
+        final_time = execution_times[-1]
+        improvement_pct = ((initial_time - final_time) / initial_time) * 100
+        
+        # Add improvement annotation
+        fig.add_annotation(
+            x=iteration_labels[-1],
+            y=execution_times[-1],
+            text=f"Total Improvement: {improvement_pct:.1f}%",
+            showarrow=True,
+            arrowhead=2,
+            bgcolor="rgba(255,255,255,0.8)",
+            bordercolor="#333",
+            borderwidth=1
+        )
+    
+    # Update layout with Swiss design aesthetics
+    fig.update_layout(
+        title={
+            'text': "SQL Query Performance Enhancement Progress",
+            'x': 0.5,
+            'font': {'family': 'Helvetica Neue', 'size': 20, 'color': '#1a1a1a'}
+        },
+        xaxis_title="Iteration",
+        yaxis_title="Execution Time (ms)",
+        font=dict(family="Helvetica Neue", size=12, color="#333"),
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        showlegend=True,
+        legend=dict(
+            yanchor="top",
+            y=0.99,
+            xanchor="left",
+            x=0.01
+        ),
+        margin=dict(l=0, r=0, t=50, b=0)
+    )
+    
+    # Update axes
+    fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='#e0e0e0')
+    fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='#e0e0e0')
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Show summary stats
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Total Iterations", len(history))
+    with col2:
+        if len(execution_times) >= 2:
+            st.metric("Time Improvement", f"{improvement_pct:.1f}%", 
+                     delta=f"{initial_time - final_time:.1f}ms")
+    with col3:
+        st.metric("Best Time", f"{min(execution_times):.1f}ms")
 
-    # Offer to start if we have necessary state
-    if not st.session_state.get("iter_current"):
-        base_data = st.session_state.get("sqlite_collected")
-        base_diag = st.session_state.get("current_diagnosis")
-        if base_data and base_diag:
-            if st.button("Start Iterative Improvement", key="start_iterative"):
-                _start_iterative_session(base_data, base_diag)
-                st.experimental_rerun()
+
+def _get_improvement_versions():
+    """Return labeled versions from history including original and improvements."""
+    versions = []
+    improved_counter = 0
+    for item in st.session_state.improvement_history:
+        label = ""
+        if item.get("type") == "original":
+            label = "Original"
         else:
-            st.info("Analyze a SQLite query above to begin iterative improvement.")
-        return
-
-    # Current context
-    current = st.session_state.get("iter_current", {})
-    current_query = (current.get("db_data") or {}).get("query", "")
-
-    st.markdown("### Current Query")
-    st.code(current_query, language="sql")
-
-    st.markdown("### Current Analysis")
-    display_analysis_results(current.get("diagnosis") or {})
-
-    # Proposal stage
-    proposal = st.session_state.get("iter_proposal")
-    if not proposal:
-        if st.button("✨ Propose Improvement", key="iter_propose_btn"):
-            try:
-                diagnostician = DatabaseDiagnostician()
-                prior_diag = current.get("diagnosis")
-                prior_xml = prior_diag.get("raw_response") if isinstance(prior_diag, dict) else None
-                improved = diagnostician.improve_query(current.get("db_data") or {}, prior_diagnosis_xml=prior_xml, prior_diagnosis=prior_diag if isinstance(prior_diag, dict) else None)
-                st.session_state["iter_proposal"] = improved
-                proposal = improved
-            except Exception as e:
-                st.error(f"Improve query failed: {e}")
-                proposal = None
-
-    if proposal and proposal.get("improved_query"):
-        st.markdown("### Proposed Improved SQL")
-        st.code(proposal.get("improved_query", ""), language="sql")
-        if proposal.get("rationale"):
-            st.info(f"Rationale: {proposal['rationale']}")
-
-        if st.button("Run Current & Improved • Continue", key="iter_run_compare_continue", use_container_width=True):
-            db_path = st.session_state.get("sqlite_db_path")
-            if not db_path or not os.path.exists(db_path):
-                st.error("SQLite database path not set or file missing")
+            improved_counter += 1
+            if item.get("type") == "recursive":
+                label = f"Improved {improved_counter} (Recursive)"
             else:
-                try:
-                    collector = SqliteCollector(db_path)
-                    # Execute both queries to gather logs and timings
-                    with st.spinner("Running current query..."):
-                        base_exec = collector.collect_for_query(current_query, estimated_plan_only=False)
-                    with st.spinner("Running improved query..."):
-                        improved_exec = collector.collect_for_query(proposal.get("improved_query", ""), estimated_plan_only=False)
+                label = f"Improved {improved_counter}"
+        versions.append({
+            "label": label,
+            "iteration": item.get("iteration"),
+            "type": item.get("type"),
+            "execution_time_ms": item.get("execution_time_ms"),
+            "query": item.get("query"),
+            "diagnosis": item.get("diagnosis"),
+        })
+    return versions
 
-                    # Persist to history
-                    _append_run_history("sqlite", f"iter round {st.session_state.get('iter_round', 1)} current", base_exec)
-                    _append_run_history("sqlite", f"iter round {st.session_state.get('iter_round', 1)} improved", improved_exec)
-
-                    # Show comparison
-                    base_ms = _extract_elapsed_ms_from_logs(base_exec.get("logs", ""))
-                    imp_ms = _extract_elapsed_ms_from_logs(improved_exec.get("logs", ""))
-                    st.markdown("### Runtime Comparison")
-                    cA, cB = st.columns(2)
-                    with cA:
-                        st.metric("Current elapsed (ms)", base_ms if base_ms is not None else "n/a")
-                    with cB:
-                        st.metric("Improved elapsed (ms)", imp_ms if imp_ms is not None else "n/a")
-                    if base_ms is not None and imp_ms is not None:
-                        delta = round(base_ms - imp_ms, 2)
-                        if delta > 0:
-                            st.success(f"Improved query is faster by {delta} ms")
-                        elif delta < 0:
-                            st.warning(f"Improved query is slower by {abs(delta)} ms")
-
-                    # Continue with improved as new current and re‑analyze
-                    try:
-                        diagnostician = DatabaseDiagnostician()
-                        new_diag = diagnostician.analyze_performance(improved_exec)
-                    except Exception as e:
-                        new_diag = {"reasoning": f"Analysis failed: {e}", "bottlenecks": [], "root_causes": [], "recommendations": [], "comments": []}
-
-                    rounds = st.session_state.get("iter_rounds", [])
-                    rounds.append({
-                        "round": st.session_state.get("iter_round", 1),
-                        "current_ms": base_ms,
-                        "improved_ms": imp_ms,
-                        "improved_query": proposal.get("improved_query", ""),
-                    })
-                    st.session_state["iter_rounds"] = rounds
-
-                    st.session_state["iter_current"] = {"db_data": improved_exec, "diagnosis": new_diag}
-                    st.session_state["iter_round"] = st.session_state.get("iter_round", 1) + 1
-                    st.session_state["iter_proposal"] = None
-
-                except Exception as e:
-                    st.error(f"Run & continue failed: {e}")
-
-    # Timeline
-    rounds = st.session_state.get("iter_rounds", [])
-    if rounds:
-        with st.expander("Iteration Timeline", expanded=False):
-            try:
-                timeline_rows = [
-                    {
-                        "Round": r.get("round"),
-                        "Current (ms)": r.get("current_ms"),
-                        "Improved (ms)": r.get("improved_ms"),
-                        "Query": (r.get("improved_query", "").strip().replace("\n", " ")[:120] + ("…" if len(r.get("improved_query", "")) > 120 else "")),
-                    }
-                    for r in rounds
-                ]
-                st.dataframe(timeline_rows, use_container_width=True, hide_index=True)
-            except Exception:
-                pass
 
 def _format_chat_analysis_xml(xml_content: str) -> str:
     """Parse and format XML analysis content for chat display."""
@@ -1013,6 +996,162 @@ def run_analysis(data_source):
         return None
 
 
+def handle_query_comparison():
+    """Handle the execution and comparison of original vs improved queries."""
+    db_path = st.session_state.get("sqlite_db_path")
+    improved = st.session_state.get('improved_sql')
+    base_data = st.session_state.get('base_query_data')
+    
+    if not db_path or not improved or not base_data:
+        st.error("Missing required data for comparison")
+        return
+    
+    collector = SqliteCollector(db_path)
+    
+    # Run original query
+    with st.spinner("Running original query..."):
+        original_query = base_data.get("query", "")
+        base_exec = collector.collect_for_query(original_query, estimated_plan_only=False)
+    
+    # Run improved query (only if valid SELECT)
+    with st.spinner("Running improved query..."):
+        improved_query = improved.get("improved_query", "")
+        if not improved_query or not improved_query.strip().lower().startswith("select"):
+            st.warning("Improved query is not a valid SELECT. Skipping execution.")
+            improved_exec = {"logs": "", "result_preview": ""}
+        else:
+            improved_exec = collector.collect_for_query(improved_query, estimated_plan_only=False)
+    
+    # Extract execution times
+    base_ms = _extract_elapsed_ms_from_logs(base_exec.get("logs", ""))
+    imp_ms = _extract_elapsed_ms_from_logs(improved_exec.get("logs", ""))
+    
+    # Add improved query to history (only if executed and timed)
+    if imp_ms is not None:
+        # Analyze the improved query
+        diagnostician = DatabaseDiagnostician()
+        improved_diagnosis = diagnostician.analyze_performance(improved_exec)
+        
+        add_iteration_to_history(
+            query=improved_query,
+            execution_time_ms=imp_ms,
+            diagnosis=improved_diagnosis,
+            iteration_type="improved"
+        )
+    
+    # Display comparison results
+    st.markdown("### 🔄 Execution Comparison")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.metric("Original Time (ms)", base_ms if base_ms is not None else "n/a")
+    with col2:
+        st.metric("Improved Time (ms)", imp_ms if imp_ms is not None else "n/a")
+    with col3:
+        if base_ms is not None and imp_ms is not None:
+            improvement = ((base_ms - imp_ms) / base_ms) * 100
+            st.metric("Improvement %", f"{improvement:.1f}%", delta=f"{base_ms - imp_ms:.1f}ms")
+    
+    # Result previews
+    col1, col2 = st.columns(2)
+    with col1:
+        with st.expander("Original Query Results"):
+            if base_exec.get("result_preview"):
+                st.code(base_exec.get("result_preview"), language="text")
+            else:
+                st.text("(no preview)")
+    
+    with col2:
+        with st.expander("Improved Query Results"):
+            if improved_exec.get("result_preview"):
+                st.code(improved_exec.get("result_preview"), language="text")
+            else:
+                st.text("(no preview)")
+    
+    # Performance feedback
+    if base_ms is not None and imp_ms is not None:
+        if imp_ms < base_ms:
+            st.success(f"🎉 Improved query is faster by {round(base_ms - imp_ms, 2)} ms ({improvement:.1f}% improvement)")
+        elif imp_ms == base_ms:
+            st.info("⚖️ Both queries perform similarly")
+        else:
+            st.warning(f"⚠️ Improved query is slower by {round(imp_ms - base_ms, 2)} ms")
+    elif base_ms is not None and imp_ms is None:
+        st.info("Improved query was not executed (invalid or non-SELECT). Only original timing is available.")
+
+
+def handle_recursive_improvement():
+    """Handle recursive improvement by using the latest query iteration."""
+    if not st.session_state.improvement_history:
+        st.error("No previous iterations found for recursive improvement")
+        return
+    
+    # Get the latest iteration
+    latest_iteration = st.session_state.improvement_history[-1]
+    base_data = st.session_state.get('base_query_data')
+    
+    if not base_data:
+        st.error("Base query data not found")
+        return
+    
+    # Create enhanced data using latest query + all original diagnostics
+    enhanced_data = dict(base_data)  # Copy original data
+    enhanced_data["query"] = latest_iteration["query"]  # Use latest improved query
+    
+    # Add comprehensive context from all iterations
+    iteration_context = "\n".join([
+        f"Iteration {i['iteration']} ({i['type']}): {i['execution_time_ms']}ms - {i['query'][:100]}..."
+        for i in st.session_state.improvement_history
+    ])
+    
+    enhanced_data["improvement_history"] = iteration_context
+    
+    # Generate recursive improvement
+    diagnostician = DatabaseDiagnostician()
+    
+    with st.spinner("Generating recursively improved query..."):
+        # Use latest diagnosis and all historical context
+        latest_diagnosis = latest_iteration["diagnosis"]
+        improved = diagnostician.improve_query(
+            enhanced_data,
+            prior_diagnosis_xml=latest_diagnosis.get('raw_response'),
+            prior_diagnosis=latest_diagnosis
+        )
+    
+    st.session_state['improved_sql'] = improved
+    st.success(f"🔄 Generated recursively improved query (iteration {st.session_state.current_iteration + 1})")
+    
+    # Automatically run and compare the new query
+    if improved.get("improved_query") and improved.get("improved_query").strip().lower().startswith("select"):
+        db_path = st.session_state.get("sqlite_db_path")
+        if db_path:
+            collector = SqliteCollector(db_path)
+            
+            with st.spinner("Testing recursively improved query..."):
+                recursive_exec = collector.collect_for_query(improved.get("improved_query"), estimated_plan_only=False)
+            
+            recursive_ms = _extract_elapsed_ms_from_logs(recursive_exec.get("logs", ""))
+            
+            if recursive_ms is not None:
+                # Analyze the recursive query
+                recursive_diagnosis = diagnostician.analyze_performance(recursive_exec)
+                
+                add_iteration_to_history(
+                    query=improved.get("improved_query"),
+                    execution_time_ms=recursive_ms,
+                    diagnosis=recursive_diagnosis,
+                    iteration_type="recursive"
+                )
+                
+                # Show immediate feedback
+                previous_time = latest_iteration["execution_time_ms"]
+                if recursive_ms < previous_time:
+                    improvement = ((previous_time - recursive_ms) / previous_time) * 100
+                    st.success(f"🚀 Recursive improvement successful! {improvement:.1f}% faster than previous iteration")
+                else:
+                    st.info("🔄 Recursive iteration complete. Check the progress chart for overall trends.")
+
+
 def main():
     """Main Streamlit application."""
     display_header()
@@ -1057,6 +1196,9 @@ def main():
             display_analysis_results(st.session_state['current_diagnosis'])
     
     elif selection["mode"] == "sqlite":
+        # Initialize improvement tracking
+        initialize_improvement_tracking()
+        
         sqlite_data = selection.get("data")
         if selection.get("valid") and sqlite_data:
             st.markdown("### Preview")
@@ -1077,77 +1219,175 @@ def main():
                 st.download_button("Download Logs", log_text, file_name="sqlite_logs.txt")
 
             st.markdown("---")
+            
+            # Step 1: Collect Diagnostics
             c1, c2, c3 = st.columns([1, 2, 1])
             with c2:
-                # Show Analyze button always, Improve & Compare only after analysis
-                if st.button("🚀 Analyze SQLite Query", key="sqlite_analyze", use_container_width=True):
-                    diagnosis = run_analysis(sqlite_data)
-                    if diagnosis:
-                        st.session_state['current_diagnosis'] = diagnosis
-                        st.session_state['current_mode'] = "sqlite"
-                
-                # Only show Improve & Compare if we have analysis results
-                if 'current_diagnosis' in st.session_state and st.session_state.get('current_mode') == "sqlite":
-                    if st.button("✨ Improve & Compare", key="sqlite_improve", use_container_width=True):
-                        diagnostician = DatabaseDiagnostician()
-                        prior_diag = st.session_state.get('current_diagnosis')
-                        prior_xml = prior_diag.get('raw_response') if isinstance(prior_diag, dict) else None
-                        improved = diagnostician.improve_query(sqlite_data, prior_diagnosis_xml=prior_xml, prior_diagnosis=prior_diag if isinstance(prior_diag, dict) else None)
-                        st.session_state['improved_sql'] = improved
+                if st.button("🚀 Collect Diagnostics", key="sqlite_collect_step", use_container_width=True):
+                    # Store base query data for future iterations
+                    st.session_state.base_query_data = sqlite_data
+                    st.session_state['diagnostics_collected'] = True
+                    st.success("✅ Diagnostics collected! You can now analyze performance.")
+            
+            # Step 2: Analyze Performance (only show if diagnostics collected)
+            if st.session_state.get('diagnostics_collected'):
+                st.markdown("---")
+                c1, c2, c3 = st.columns([1, 2, 1])
+                with c2:
+                    if st.button("🔍 Analyze Performance", key="sqlite_analyze", use_container_width=True):
+                        diagnosis = run_analysis(sqlite_data)
+                        if diagnosis:
+                            st.session_state['current_diagnosis'] = diagnosis
+                            st.session_state['current_mode'] = "sqlite"
+                            
+                            # Add original query to improvement history
+                            original_time = _extract_elapsed_ms_from_logs(sqlite_data.get("logs", ""))
+                            if original_time is not None:
+                                add_iteration_to_history(
+                                    query=sqlite_data.get("query", ""),
+                                    execution_time_ms=original_time,
+                                    diagnosis=diagnosis,
+                                    iteration_type="original"
+                                )
 
+            # Step 3: Display Analysis Results (only show if we have analysis)
             if 'current_diagnosis' in st.session_state and st.session_state.get('current_mode') == "sqlite":
                 st.markdown("---")
                 st.markdown("## 📊 Analysis Results")
                 display_analysis_results(st.session_state['current_diagnosis'])
 
-            if st.session_state.get('improved_sql') and st.session_state.get('current_mode') == "sqlite":
+                # Step 4: Improvement Options (placed AFTER analysis results)
                 st.markdown("---")
-                st.markdown("## 🔁 SQLite Comparison")
-                improved = st.session_state['improved_sql']
-                with st.expander("Proposed Improved SQL"):
-                    st.code(improved.get("improved_query", ""), language="sql")
-                    if improved.get("rationale"):
-                        st.info(f"Rationale: {improved['rationale']}")
+                st.markdown("## 🚀 Query Improvement Options")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if st.button("✨ Generate Improved Query", key="sqlite_improve", use_container_width=True):
+                        diagnostician = DatabaseDiagnostician()
+                        
+                        # Get the most recent query and diagnosis for recursive improvement
+                        current_data = st.session_state.base_query_data
+                        if st.session_state.improvement_history:
+                            # Use the latest iteration for recursive improvement
+                            latest_iteration = st.session_state.improvement_history[-1]
+                            current_data = dict(current_data)  # Copy base data
+                            current_data["query"] = latest_iteration["query"]  # Use latest query
+                        
+                        prior_diag = st.session_state.get('current_diagnosis')
+                        prior_xml = prior_diag.get('raw_response') if isinstance(prior_diag, dict) else None
+                        
+                        improved = diagnostician.improve_query(
+                            current_data, 
+                            prior_diagnosis_xml=prior_xml, 
+                            prior_diagnosis=prior_diag if isinstance(prior_diag, dict) else None
+                        )
+                        # Guard: ensure improved SELECT is present
+                        if improved.get("improved_query"):
+                            st.session_state['improved_sql'] = improved
+                            st.success("✅ Improved query generated!")
+                        else:
+                            st.warning("The model did not return a valid SELECT statement. Try again or adjust inputs.")
+                
+                with col2:
+                    if st.session_state.get('improved_sql'):
+                        if st.button("🔄 Run & Compare All Queries", key="sqlite_compare_exec", use_container_width=True):
+                            handle_query_comparison()
+                
+                # Display improvement progress chart
+                if st.session_state.improvement_history:
+                    st.markdown("### 📈 Improvement Progress")
+                    plot_improvement_progress()
+                
+                # Display improved query if available
+                if st.session_state.get('improved_sql'):
+                    st.markdown("### 🔧 Improved Query Versions")
+                    versions = _get_improvement_versions()
 
-                if st.button("🔄 Run Both & Compare", key="sqlite_compare_exec", use_container_width=True):
-                    db_path = st.session_state.get("sqlite_db_path")
-                    if db_path and improved.get("improved_query"):
-                        collector = SqliteCollector(db_path)
-                        with st.spinner("Running original query..."):
-                            base_exec = collector.collect_for_query(sqlite_data.get("query", ""), estimated_plan_only=False)
-                        with st.spinner("Running improved query..."):
-                            improved_exec = collector.collect_for_query(improved.get("improved_query", ""), estimated_plan_only=False)
+                    # Sidebar: version picker and actions
+                    with st.sidebar:
+                        st.markdown("### 🧪 Compare & Select Version")
+                        labels = [v["label"] for v in versions]
+                        if labels:
+                            idx = st.selectbox("Choose version to inspect", list(range(len(labels))), format_func=lambda i: labels[i])
+                            selected = versions[idx]
+                            st.metric("Runtime (ms)", selected.get("execution_time_ms", "n/a"))
+                            if st.button("Use this as baseline for next improvement"):
+                                # Set as baseline for next improvement iteration
+                                st.session_state.base_query_data = dict(st.session_state.base_query_data or {})
+                                if st.session_state.base_query_data is not None:
+                                    st.session_state.base_query_data["query"] = selected["query"]
+                                st.session_state.baseline_selection = selected["label"]
+                                st.success(f"Baseline set to {selected['label']}")
+                        
+                        if versions:
+                            # Find best time
+                            valid = [v for v in versions if v.get("execution_time_ms") is not None]
+                            if valid:
+                                best = min(valid, key=lambda v: v["execution_time_ms"]) 
+                                if st.button("✅ Use Best Query"):
+                                    st.session_state.base_query_data = dict(st.session_state.base_query_data or {})
+                                    st.session_state.base_query_data["query"] = best["query"]
+                                    st.success(f"Best query selected: {best['label']} ({best['execution_time_ms']:.2f} ms)")
 
-                        # Persist both runs to history
-                        _append_run_history("sqlite", "original (compare)", base_exec)
-                        _append_run_history("sqlite", "improved (compare)", improved_exec)
-
-                        base_ms = _extract_elapsed_ms_from_logs(base_exec.get("logs", ""))
-                        imp_ms = _extract_elapsed_ms_from_logs(improved_exec.get("logs", ""))
-
-                        st.markdown("### Runtime Comparison")
-                        cA, cB = st.columns(2)
-                        with cA:
-                            st.metric("Original elapsed (ms)", base_ms if base_ms is not None else "n/a")
-                        with cB:
-                            st.metric("Improved elapsed (ms)", imp_ms if imp_ms is not None else "n/a")
-                        with st.expander("Original Result Preview"):
-                            if base_exec.get("result_preview"):
-                                st.code(base_exec.get("result_preview"), language="text")
-                            else:
-                                st.text("(no preview)")
-                        with st.expander("Improved Result Preview"):
-                            if improved_exec.get("result_preview"):
-                                st.code(improved_exec.get("result_preview"), language="text")
-                            else:
-                                st.text("(no preview)")
-                        if base_ms is not None and imp_ms is not None and imp_ms < base_ms:
-                            st.success(f"Improved query is faster by {round(base_ms - imp_ms, 2)} ms")
-                        elif base_ms is not None and imp_ms is not None and imp_ms >= base_ms:
-                            st.warning(f"Improved query not faster ({round(imp_ms - base_ms, 2)} ms slower)")
-
-            # Iterative improvement loop (simple, single-path)
-            display_iterative_improvement_ui()
+                    # Main area: dropdown to select and view any SQL version
+                    versions = _get_improvement_versions()
+                    if versions:
+                        # Add session state for selected version if not exists
+                        if "selected_version_idx" not in st.session_state:
+                            st.session_state.selected_version_idx = len(versions) - 1  # Default to latest
+                        
+                        # Dropdown to select version
+                        col1, col2, col3, col4 = st.columns([2, 1, 1, 1])
+                        with col1:
+                            labels = [f"{v['label']} ({v.get('execution_time_ms', 'n/a')} ms)" for v in versions]
+                            selected_idx = st.selectbox(
+                                "Select SQL Version to View:",
+                                options=list(range(len(labels))),
+                                format_func=lambda i: labels[i],
+                                index=st.session_state.selected_version_idx,
+                                key="version_dropdown"
+                            )
+                            st.session_state.selected_version_idx = selected_idx
+                        
+                        selected_version = versions[selected_idx]
+                        runtime = selected_version.get("execution_time_ms")
+                        
+                        with col2:
+                            # Show runtime metric for selected version
+                            if runtime is not None:
+                                st.metric("Runtime", f"{runtime:.2f} ms")
+                        
+                        with col3:
+                            # Show improvement vs original
+                            if len(versions) > 1 and runtime is not None:
+                                original_time = next((v.get("execution_time_ms") for v in versions if v.get("type") == "original"), None)
+                                if original_time is not None and original_time != runtime:
+                                    improvement = ((original_time - runtime) / original_time) * 100
+                                    st.metric("vs Original", f"{improvement:+.1f}%")
+                        
+                        with col4:
+                            # Use selected version as baseline button
+                            if st.button("🎯 Use as Baseline", key="use_selected_baseline", help="Use this query as the starting point for the next improvement"):
+                                st.session_state.base_query_data = dict(st.session_state.base_query_data or {})
+                                if st.session_state.base_query_data is not None:
+                                    st.session_state.base_query_data["query"] = selected_version["query"]
+                                st.session_state.baseline_selection = selected_version["label"]
+                                st.success(f"✅ Baseline set to {selected_version['label']}")
+                        
+                        # Display selected query
+                        with st.expander(f"📝 SQL Query: {selected_version['label']}", expanded=True):
+                            st.code(selected_version.get("query", ""), language="sql")
+                            
+                            # Show rationale if this is an improved version and we have it
+                            if (selected_version.get("type") in ["improved", "recursive"] and 
+                                selected_idx == len(versions) - 1 and  # Latest version
+                                st.session_state.get('improved_sql', {}).get("rationale")):
+                                st.info(f"**Rationale:** {st.session_state['improved_sql']['rationale']}")
+                    
+                    # Option for recursive improvement
+                    if st.button("🔄 Generate Even Better Query (Recursive)", key="sqlite_recursive"):
+                        handle_recursive_improvement()
     
     elif selection["mode"] == "mysql" or selection["mode"] == "postgresql":
         # These modes are placeholders - no functionality yet
@@ -1156,6 +1396,18 @@ def main():
     elif selection["mode"] == "chat":
         # Chat mode is handled in display_scenario_selector
         pass
+    
+    # Clear improvement history button (for debugging/reset)
+    if st.session_state.get("improvement_history"):
+        with st.sidebar:
+            st.markdown("### 🔧 Development Tools")
+            if st.button("🗑️ Clear Improvement History"):
+                st.session_state.improvement_history = []
+                st.session_state.current_iteration = 0
+                st.session_state.pop('improved_sql', None)
+                st.session_state.pop('current_diagnosis', None)
+                st.success("Improvement history cleared")
+                st.rerun()
 
 
 

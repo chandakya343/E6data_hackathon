@@ -321,3 +321,67 @@ Common root_cause types: MissingIndex, InappropriateJoin, FullTableScan, Subopti
 Common recommendation types: CreateIndex, RewriteQuery, UpdateStatistics, ConfigChange, SchemaOptimization
 
 Always provide reasoning first, then identify bottlenecks with severity, then root causes, then prioritized recommendations."""
+
+
+def create_chat_system_prompt() -> str:
+    """
+    Create the simplified chat system prompt for the SQL master assistant.
+    The model must respond ONLY with a single <response>...</response> block.
+    """
+    return (
+        "You are a SQL Performance Master. You help users optimize SQL queries across engines (SQLite, PostgreSQL, MySQL, SQL Server).\n"
+        "- Be precise, practical, and concise.\n"
+        "- Prefer actionable guidance: indexes, query rewrites, data access patterns, statistics, and configuration tips.\n"
+        "- When proposing SQL, include complete runnable statements inside code fences when appropriate.\n"
+        "- Never include disclaimers or meta discussion.\n"
+        "\n"
+        "STRICT OUTPUT FORMAT:\n"
+        "- Your ENTIRE output must be exactly one XML-like block: <response>...content...</response>\n"
+        "- Do NOT echo <history> or <user>. Do NOT include any other tags or text.\n"
+        "- Keep responses focused.\n"
+    )
+
+
+def build_chat_prompt(history: List[Dict[str, str]], user_message: str) -> str:
+    """
+    Build a simplified chat prompt with <history>, <user> tags.
+
+    Args:
+        history: List of {"user": str, "response": str} pairs
+        user_message: Current user message to respond to
+
+    Returns:
+        Prompt string to send to the model
+    """
+    def _escape(text: str) -> str:
+        return text.strip() if text else ""
+
+    parts: List[str] = []
+    parts.append("<history>")
+    for item in history or []:
+        if item.get("user"):
+            parts.append(f"  <user>{_escape(item['user'])}</user>")
+        if item.get("response"):
+            parts.append(f"  <response>{_escape(item['response'])}</response>")
+    parts.append("</history>")
+    parts.append("")
+    parts.append(f"<user>{_escape(user_message)}</user>")
+
+    return "\n".join(parts)
+
+
+def extract_response_from_text(raw_text: str) -> str:
+    """
+    Extract content inside <response>...</response> from model output.
+    Falls back to cleaning XML-like tags if not found.
+    """
+    try:
+        start = raw_text.find("<response>")
+        end = raw_text.find("</response>")
+        if start != -1 and end != -1:
+            start += len("<response>")
+            return raw_text[start:end].strip()
+    except Exception:
+        pass
+    # Fallback to cleaning tags
+    return clean_response_from_xml_tags(raw_text)

@@ -9,6 +9,8 @@ Traditional database performance optimization requires expert DBAs to manually a
 ### ✨ Key Features
 
 - **🤖 AI-Powered Analysis**: Uses Google's Gemini LLM for expert-level database diagnostics
+- **🔄 Recursive Query Improvement**: Iteratively improve SQL queries using previous results and comprehensive diagnostics
+- **📊 Performance Progress Tracking**: Visual charts showing SQL enhancement progress across iterations
 - **🏗️ Structured XML Prompting**: Ensures consistent, parseable analysis outputs
 - **📊 Multi-Interface Support**: Both CLI and beautiful web interface (Streamlit)
 - **💬 AI Chat Assistant**: Interactive chat with SQL performance expert - structured analysis for first query, then natural conversation
@@ -118,6 +120,22 @@ Each analysis provides:
 - **⚠️ Root Causes**: Categorized list of identified problems
 - **💡 Recommendations**: Specific actionable solutions with SQL examples
 - **📝 Additional Comments**: Tips, monitoring suggestions, and best practices
+
+### 4. Recursive Query Improvement Workflow
+The system now supports iterative query optimization:
+
+1. **🔍 Collect Diagnostics**: Gather comprehensive database information
+2. **📊 Analyze Performance**: AI analyzes bottlenecks and provides recommendations
+3. **✨ Generate Improved Query**: AI creates optimized version using analysis insights
+4. **🔄 Run & Compare**: Execute both queries and measure performance improvements
+5. **📈 Recursive Enhancement**: Use results to generate even better queries iteratively
+6. **📊 Progress Visualization**: View improvement trends across iterations
+
+#### Key Benefits:
+- **Iterative Refinement**: Each improvement builds on previous optimizations
+- **Comprehensive Context**: Uses all available diagnostics (schema, logs, stats) in each iteration
+- **Performance Tracking**: Visual charts show progress over time
+- **Automated Comparison**: Instant execution time comparisons between iterations
 
 ## 📊 Sample Analysis
 

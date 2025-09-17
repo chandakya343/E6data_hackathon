@@ -20,6 +20,9 @@ psutil>=5.9.0,<6.0.0
 # XML processing and utilities
 lxml>=4.9.0,<5.0.0
 
+# Visualization and plotting
+plotly>=5.17.0,<6.0.0
+
 # Optional: Additional database drivers
 # sqlite3 (built into Python)
 # psycopg2-binary>=2.9.0  # PostgreSQL
